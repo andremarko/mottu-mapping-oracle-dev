@@ -1,3 +1,52 @@
+/* 
+=====================
+Mottu Mapping - Package and Java Source
+ANDRE GERALDI MARCOLONGO, RM555285 - 2TDSPV
+
+1 - ANTES DE RODAR ESSE SCRIPT, CERTIFIQUE-SE DE QUE AS REFERIDAS TABELAS ESTEJAM CRIADAS E POPULADAS NO SCHEMA;
+    - PARA TAL, RODE DDL_MOTTU_MAPPING.SQL e DML_MOTTU_MAPPING.SQL;
+
+2 - TAMBÉM, IMPORTE A REFERIDA BIBLIOTECA JAVA bcrypt-0.4.jar PARA O SEU SCHEMA RODANDO loadjava -u <username>@<host>:<port>/<service> -p -v -r -f jbcrypt-0.4.jar.
+
+3 - COM A BIBLIOTECA IMPORTADA, PRIMEIRAMENTE CRIE A CLASSE UTILITÁRIA QUE IMPLEMENTA AS FUNÇÕES DE HASH E VERIFICAÇÕES DE SENHA;
+
+4 - APÓS ISSO CRIE A ASSINATURA DO PACKAGE E O BODY DA PACKAGE;
+
+5 - POR ÚLTIMO RODE, CRIE A TABELA DE AUDITORIA E CRIE O TRIGGER
+
+=====================
+*/
+
+
+-- UTILITÁRIO JAVA
+CREATE OR REPLACE AND RESOLVE JAVA SOURCE NAMED "BCryptUtil" AS
+-- IMPORTA .JAR CARREGADO NO SCHEMA
+-- 12 SALTOS, RETORNA SENHA EM HASH
+-- VERIFICA SENHA PASSADA COMO PARAMETRO E O HASH (SENHA) ARMAZENADO NO BANCO
+import org.mindrot.jbcrypt.BCrypt;
+
+public class BCryptUtil {
+    
+    public static String hashPassword(String plain) throws IllegalArgumentException {
+        if (plain == null || plain.isEmpty()) {
+            throw new IllegalArgumentException("Password cannot be null or empty");
+        }
+        return BCrypt.hashpw(plain, BCrypt.gensalt(12));
+    }
+
+    public static boolean verifyPassword(String password, String hash) {
+        if (password == null || hash == null) {
+            throw new IllegalArgumentException("Invalid password or hash");
+        } 
+        return BCrypt.checkpw(password, hash);
+    }
+};
+/
+
+
+-- PACKAGE --
+
+-- ASSINATURA
 CREATE OR REPLACE PACKAGE mottu_mapping_pkg AS
       
        -- FUNÇÃO QUE RETORNA TABELA EM FORMATO JSON    
@@ -25,18 +74,84 @@ CREATE OR REPLACE PACKAGE mottu_mapping_pkg AS
     ) RETURN BOOLEAN;
     
     
+    PROCEDURE proc_join_json(p_result OUT CLOB);
+    
     -- SOMA DE MOTOS POR YARD
-    PROCEDURE sum_motorcycles_by_yard_sector;
-    
-    
-    --PROCEDURE sum_fatos;
-    
+    PROCEDURE proc_sum_motorcycles_by_yard_sector;
+     
 END mottu_mapping_pkg;
 /
 
 
 CREATE OR REPLACE PACKAGE BODY mottu_mapping_pkg AS
-
+    
+    JAVA_EXCEPTION EXCEPTION;
+    PRAGMA EXCEPTION_INIT(JAVA_EXCEPTION, -6502);
+    
+    
+    FUNCTION table_to_json(p_table_name IN VARCHAR2)
+    RETURN CLOB
+    IS
+        v_json      CLOB := '[';
+        v_first_row BOOLEAN := TRUE;
+    
+        v_cursor    INTEGER;
+        v_col_cnt   INTEGER;
+        v_desc_t    DBMS_SQL.DESC_TAB;
+        v_col_val   VARCHAR2(4000);
+        v_status    INTEGER;
+    BEGIN
+        v_cursor := DBMS_SQL.OPEN_CURSOR;
+        DBMS_SQL.PARSE(v_cursor, 'SELECT * FROM ' || p_table_name, DBMS_SQL.NATIVE);
+    
+        DBMS_SQL.DESCRIBE_COLUMNS(v_cursor, v_col_cnt, v_desc_t);
+    
+        FOR i IN 1..v_col_cnt LOOP
+            DBMS_SQL.DEFINE_COLUMN(v_cursor, i, v_col_val, 4000);
+        END LOOP;
+    
+        v_status := DBMS_SQL.EXECUTE(v_cursor);
+    
+        LOOP
+            EXIT WHEN DBMS_SQL.FETCH_ROWS(v_cursor) = 0;
+    
+            IF NOT v_first_row THEN
+                v_json := v_json || ',';
+            ELSE
+                v_first_row := FALSE;
+            END IF;
+    
+            v_json := v_json || '{';
+    
+            FOR i IN 1..v_col_cnt LOOP
+                DBMS_SQL.COLUMN_VALUE(v_cursor, i, v_col_val);
+                v_json := v_json || '"' || v_desc_t(i).col_name || '":"' || NVL(v_col_val,'NULL') || '"';
+                IF i < v_col_cnt THEN
+                    v_json := v_json || ',';
+                END IF;
+            END LOOP;
+    
+            v_json := v_json || '}';
+        END LOOP;
+    
+        DBMS_SQL.CLOSE_CURSOR(v_cursor);
+    
+        v_json := v_json || ']';
+    
+        RETURN v_json;
+    
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN '[]';
+        WHEN TOO_MANY_ROWS THEN
+            RETURN '{"error":"TOO MANY ROWS"}' ;
+        WHEN OTHERS THEN
+            IF DBMS_SQL.IS_OPEN(v_cursor) THEN
+                DBMS_SQL.CLOSE_CURSOR(v_cursor);
+            END IF;
+            RETURN '{"error":"UNKNOWN ERROR: ' || SQLERRM || '"}';
+    END table_to_json;
+ 
     -- UTILIZA LIB BCRYPT PARA TRANSFORMAR SENHA DIGITADA EM BCRYPT
     FUNCTION bcrypt_hash (p_password IN VARCHAR2)
     -- RETORNA STRING. ESSA FUNÇÃO GERA UM HASH DA SENHA PASSADA COMO PARAM
@@ -68,16 +183,54 @@ CREATE OR REPLACE PACKAGE BODY mottu_mapping_pkg AS
     EXCEPTION
         WHEN NO_DATA_FOUND THEN
             RETURN FALSE; 
-            
+    -- EXCEÇÃO DO JAVA
         WHEN JAVA_EXCEPTION THEN
             RAISE_APPLICATION_ERROR(-20011, SQLERRM);
-        
+    -- OUTRAS
         WHEN OTHERS THEN
             RETURN FALSE; 
     END validate_user;
     
+    PROCEDURE proc_join_json(p_result OUT CLOB) 
+    AS
+        v_temp_table_name(30) := 'TEMP_JOIN_RESULT';
+        BEGIN
+        -- Tenta excluir a tabela temporária se já existir
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE ' || v_temp_table_name;
+        EXCEPTION
+            WHEN OTHERS THEN
+                NULL; -- ignora erro se não existir
+        END;
+
+        -- Cria tabela temporária com resultado do JOIN
+        EXECUTE IMMEDIATE '
+            CREATE GLOBAL TEMPORARY TABLE ' || v_temp_table_name || ' ON COMMIT PRESERVE ROWS AS
+            SELECT 
+                c.id_cliente,
+                c.nome_cliente,
+                p.id_pedido,
+                p.data_pedido,
+                p.valor_total
+            FROM
+                clientes c
+            JOIN
+                pedidos p ON c.id_cliente = p.id_cliente';
+
+        -- Converte a tabela para JSON com a função
+        p_result := table_to_json(v_temp_table_name);
+
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            p_result := '{"error":"No data found in JOIN result"}';
+        WHEN INVALID_CURSOR THEN
+            p_result := '{"error":"Invalid cursor encountered"}';
+        WHEN OTHERS THEN
+            p_result := '{"error":"Unhandled error: ' || SQLERRM || '"}'; 
+    END proc_join_json;   
     
-    PROCEDURE sum_motorcycles_by_yard_sector
+    
+    PROCEDURE proc_sum_motorcycles_by_yard_sector
     AS
         CURSOR c_motos IS
             SELECT s.yard_id,
@@ -94,10 +247,10 @@ CREATE OR REPLACE PACKAGE BODY mottu_mapping_pkg AS
         v_total       NUMBER := 0;
     
     BEGIN
-        -- Cabeçalho
+        -- CABEÇALHO
         DBMS_OUTPUT.PUT_LINE('YARD_ID SECTOR_ID QTY');
         DBMS_OUTPUT.PUT_LINE('------- -------- ---');
-    
+                -- CURSOR
         FOR r IN c_motos LOOP
             -- Mudou de yard
             IF v_prev_yard IS NOT NULL AND r.yard_id <> v_prev_yard THEN
@@ -181,9 +334,15 @@ END mottu_mapping_pkg;
 /
 
 
+-- END PACKAGE
 
 
-select * from tb_auditoria;
+
+
+
+
+
+
 
 CREATE TABLE TB_AUDITORIA ( 
     audit_id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, 
@@ -196,7 +355,6 @@ CREATE TABLE TB_AUDITORIA (
 );
 
 
-
 CREATE OR REPLACE TRIGGER afi_auditoria_tb_motorcycle
 AFTER INSERT OR UPDATE OR DELETE ON tb_motorcycle
 FOR EACH ROW
@@ -205,7 +363,7 @@ DECLARE
     v_new CLOB;
     v_op_type VARCHAR2(10);
 BEGIN
-    -- Determina o tipo de operação
+    -- OPERATION TYPE
     IF INSERTING THEN
         v_op_type := 'INSERT';
     ELSIF UPDATING THEN
@@ -214,7 +372,7 @@ BEGIN
         v_op_type := 'DELETE';
     END IF;
 
-    -- Monta string com valores antigos
+    -- STRING WITH OLD VALUES 
     IF DELETING OR UPDATING THEN
         v_old := 'motorcycle_id: ' || :OLD.motorcycle_id ||
                  ', plate: ' || :OLD.plate ||
@@ -223,7 +381,7 @@ BEGIN
                  ', sector_id: ' || :OLD.sector_id;
     END IF;
 
-    -- Monta string com valores novos
+    -- NEW VALUES
     IF INSERTING OR UPDATING THEN
         v_new := 'motorcycle_id: ' || :NEW.motorcycle_id ||
                  ', plate: ' || :NEW.plate ||
@@ -232,7 +390,7 @@ BEGIN
                  ', sector_id: ' || :NEW.sector_id;
     END IF;
 
-    -- Insere na tabela de auditoria
+    -- INSERT NA TABELA DE AUDITORIA
     INSERT INTO TB_AUDITORIA (
         table_name,
         operation_type,
@@ -251,7 +409,7 @@ BEGIN
 
 EXCEPTION
     WHEN OTHERS THEN
-        DBMS_OUTPUT.PUT_LINE('Erro na auditoria: ' || SQLERRM);
+        DBMS_OUTPUT.PUT_LINE('ERROR: ' || SQLERRM);
 END;
 /
 
@@ -266,7 +424,7 @@ END;
 
 
 
-
+-- TESTES
 
 
 set serveroutput on;
@@ -313,108 +471,14 @@ INSERT INTO tb_user (username, pass_hash, role) VALUES ('operator', '$2b$12$uNSi
 
 commit;
 
--- UTILITÁRIO JAVA
-CREATE OR REPLACE AND RESOLVE JAVA SOURCE NAMED "BCryptUtil" AS
--- IMPORTA .JAR CARREGADO NO SCHEMA
--- 12 SALTOS, RETORNA SENHA EM HASH
--- VERIFICA SENHA PASSADA COMO PARAMETRO E O HASH (SENHA) ARMAZENADO NO BANCO
-import org.mindrot.jbcrypt.BCrypt;
-
-public class BCryptUtil {
-    
-    public static String hashPassword(String plain) throws IllegalArgumentException {
-        if (plain == null || plain.isEmpty()) {
-            throw new IllegalArgumentException("Password cannot be null or empty");
-        }
-        return BCrypt.hashpw(plain, BCrypt.gensalt(12));
-    }
-
-    public static boolean verifyPassword(String password, String hash) {
-        if (password == null || hash == null) {
-            throw new IllegalArgumentException("Invalid password or hash");
-        } 
-        return BCrypt.checkpw(password, hash);
-    }
-};
-/
 
 
 
 
 
-CREATE OR REPLACE FUNCTION rel_to_json(p_table_name IN VARCHAR2)
-RETURN CLOB
-IS
-    v_json      CLOB := '[';
-    v_first_row BOOLEAN := TRUE;
-
-    v_cursor    INTEGER;
-    v_col_cnt   INTEGER;
-    v_desc_t    DBMS_SQL.DESC_TAB;
-    v_col_val   VARCHAR2(4000);
-    v_status    INTEGER;
-BEGIN
-    v_cursor := DBMS_SQL.OPEN_CURSOR;
-    DBMS_SQL.PARSE(v_cursor, 'SELECT * FROM ' || p_table_name, DBMS_SQL.NATIVE);
-
-    DBMS_SQL.DESCRIBE_COLUMNS(v_cursor, v_col_cnt, v_desc_t);
-
-    FOR i IN 1..v_col_cnt LOOP
-        DBMS_SQL.DEFINE_COLUMN(v_cursor, i, v_col_val, 4000);
-    END LOOP;
-
-    v_status := DBMS_SQL.EXECUTE(v_cursor);
-
-    LOOP
-        EXIT WHEN DBMS_SQL.FETCH_ROWS(v_cursor) = 0;
-
-        IF NOT v_first_row THEN
-            v_json := v_json || ',';
-        ELSE
-            v_first_row := FALSE;
-        END IF;
-
-        v_json := v_json || '{';
-
-        FOR i IN 1..v_col_cnt LOOP
-            DBMS_SQL.COLUMN_VALUE(v_cursor, i, v_col_val);
-            v_json := v_json || '"' || v_desc_t(i).col_name || '":"' || NVL(v_col_val,'NULL') || '"';
-            IF i < v_col_cnt THEN
-                v_json := v_json || ',';
-            END IF;
-        END LOOP;
-
-        v_json := v_json || '}';
-    END LOOP;
-
-    DBMS_SQL.CLOSE_CURSOR(v_cursor);
-
-    v_json := v_json || ']';
-
-    RETURN v_json;
-
-EXCEPTION
-    WHEN NO_DATA_FOUND THEN
-        RETURN '[]';
-    WHEN TOO_MANY_ROWS THEN
-        RETURN '{"error":"Mais de uma linha encontrada onde não era esperado"}';
-    WHEN OTHERS THEN
-        IF DBMS_SQL.IS_OPEN(v_cursor) THEN
-            DBMS_SQL.CLOSE_CURSOR(v_cursor);
-        END IF;
-        RETURN '{"error":"Erro desconhecido: ' || SQLERRM || '"}';
-END rel_to_json;
-/
 
 
-SET SERVEROUTPUT ON;
 
-DECLARE
-    v_json CLOB;
-BEGIN
-    v_json := rel_to_json('TB_MOTORCYCLE');
-    DBMS_OUTPUT.PUT_LINE(v_json);
-END;
 
 
 
