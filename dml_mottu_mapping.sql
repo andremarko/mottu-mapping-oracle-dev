@@ -1,17 +1,18 @@
-SELECT * FROM TB_SECTORS;
-SELECT * FROM TB_MOTO_YARDS;
-SELECT * FROM TB_MOTORCYCLE;
-SELECT * FROM TB_MODEL;
+-- DML 
 
-drop table tb_moto_yard;
-drop table tb_sector;
-drop table tb_motorcycle;
-drop table tb_model;
+-- senha: admin123
+INSERT INTO tb_user (username, pass_hash, role) VALUES ('admin', '$2a$12$zN2MN1jL1L8iflJ0WM0bWeeHDhFUrze/xavNOIZPoWe/7MW5i0FF.', 'ROLE_ADMIN');
 
+-- senha: oper123
+INSERT INTO tb_user (username, pass_hash, role) VALUES ('operator', '$2a$12$zj/FdFISnYIiTamiykyFVeXd2vspvxyhdDWZRBFy3EFMNsS5ulYNy', 'ROLE_OPERATOR');
+
+--
 
 INSERT INTO tb_model (model_name) VALUES ('Mottu Pop');
 INSERT INTO tb_model (model_name) VALUES ('Mottu Sport');
 INSERT INTO tb_model (model_name) VALUES ('Mottu-E');
+
+--
 
 INSERT INTO TB_MOTO_YARD (branch_name, address, city, state, capacity)
 VALUES ('Unidade São Paulo', 'Av. Paulista, 1000', 'São Paulo', 'SP', 150);
@@ -28,6 +29,7 @@ VALUES ('Unidade Curitiba', 'Rua XV de Novembro, 400', 'Curitiba', 'PR', 80);
 INSERT INTO TB_MOTO_YARD (branch_name, address, city, state, capacity)
 VALUES ('Unidade Porto Alegre', 'Av. Borges de Medeiros, 500', 'Porto Alegre', 'RS', 90);
 
+--
 
 DECLARE
     v_yard_id NUMBER := 1;
@@ -47,6 +49,8 @@ BEGIN
     END LOOP;
 END;
 /
+
+-- 
 
 INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOTO001', '10.101,-20.101', 1, 5);
 INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOTO002', '10.102,-20.105', 2, 12);
@@ -92,17 +96,4 @@ INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOT
 INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOTO039', '10.139,-20.216', 3, 8);
 INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOTO040', '10.140,-20.219', 1, 7);
 
-INSERT INTO TB_MOTORCYCLE (plate, coordinates, model_id, sector_id) VALUES ('MOTO041', '10.140,-20.220', 1, 7);
-UPDATE TB_MOTORCYCLE
-SET coordinates = '10.150,-20.230',
-    sector_id   = 8
-WHERE plate = 'MOTO041';
-
-DELETE FROM TB_MOTORCYCLE
-WHERE plate = 'MOTO041';
-
-
-
-select * from tb_sector;
-SELECT * FROM tb_moto_yard;
-select * from tb_motorcycle;
+COMMIT;
