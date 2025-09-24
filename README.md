@@ -19,7 +19,6 @@ loadjava -u rm555285/270102@oracle.fiap.com.br:1521/orcl -v -r jbcrypt-0.4.jar
 **Resumo de execução:**
 - `ddl_mottu_mapping.sql`
 - `dml_mottu_mapping.sql`
-- `loadjava`*
+- `loadjava`* -> para rodar o loadjava é necessário ter o client do Database Oracle 19c instalado em sua máquina
 - `package_mottu_mapping.sql`
 - `test_scenarios_mottu_mapping.sql`
-
