@@ -1,5 +1,5 @@
 
-## First things first!
+## Atenção
 
 Antes de executar o script de criação da package `package_mottu_mapping.sql`, siga a ordem de execução:
 
